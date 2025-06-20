@@ -1,0 +1,65 @@
+Você precisa fazer algo semelhante a isto para realizar os saques corretamente. Segue o código que funciona em outro projeto:
+
+       $url = 'https://api.plisio.net/api/v1/currencies/BRL?api_key=' . $this->apiKey;
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPGET, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+
+        $response = curl_exec($ch);
+
+        curl_close($ch);
+
+        $result = json_decode($response, true);
+
+        // Filtrar para encontrar a moeda específica
+        $filteredCurrency = null;
+        foreach ($result['data'] as $currency) {
+            if ($currency['cid'] === 'USDT_BSC') {
+                $filteredCurrency = $currency;
+                break;
+            }
+        }
+
+        $FINALValue = $this->amount * $filteredCurrency['fiat_rate'];
+
+        // Mapeamento para os parâmetros da Plisio
+        $plisioParams = [
+            'currency' => 'USDT_BSC',
+            'type' => 'cash_out',
+            'to' => $this->toAddress,
+            'amount' => $FINALValue,
+            'api_key' => $this->apiKey
+        ];
+
+        $url1 = 'https://api.plisio.net/api/v1/operations/withdraw?' . http_build_query($plisioParams);
+
+        // Fazer a requisição
+        $ch1 = curl_init();
+        curl_setopt($ch1, CURLOPT_URL, $url1);
+        curl_setopt($ch1, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch1, CURLOPT_HTTPGET, true);
+        curl_setopt($ch1, CURLOPT_SSL_VERIFYPEER, false);
+
+        $response1 = curl_exec($ch1);
+
+        curl_close($ch1);
+
+        $result1 = json_decode($response1, true);
+
+        // Verificar resposta
+        if (!isset($result1['status']) || $result1['status'] !== 'success') {
+            $error = $result1['data']['message'] ?? 'Erro desconhecido na API Plisio';
+            Txn::EstornoPlisio($this->txn, $error);
+            return false;
+
+        }
+
+        if ($result1['status'] == 'success' || $result1['data']['status'] == 'completed') {
+
+            Txn::updatePlisioid($this->txn, $result1['data']['id']);
+            return true;
+
+        }

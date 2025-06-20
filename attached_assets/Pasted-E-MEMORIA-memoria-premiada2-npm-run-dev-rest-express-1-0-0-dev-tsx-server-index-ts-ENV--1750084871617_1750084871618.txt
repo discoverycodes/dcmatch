@@ -1,0 +1,74 @@
+E:\MEMORIA\memoria-premiada2>npm run dev
+
+> rest-express@1.0.0 dev
+> tsx server/index.ts
+
+[ENV PROTECTION] File system permissions set to 600 (owner only)
+[ENV PROTECTION] Testing protection patterns...
+[ENV PROTECTION] 2025-06-16T14:37:48.515Z - Blocked .env access attempt:
+  IP: 127.0.0.1
+  URL: /.env
+  User-Agent: test-agent
+  ✓ Pattern "/.env" correctly blocked
+[ENV PROTECTION] 2025-06-16T14:37:48.516Z - Blocked .env access attempt:
+  IP: 127.0.0.1
+  URL: .env
+  User-Agent: test-agent
+  ✓ Pattern ".env" correctly blocked
+[ENV PROTECTION] 2025-06-16T14:37:48.517Z - Blocked .env access attempt:
+  IP: 127.0.0.1
+  URL: /.env.local
+  User-Agent: test-agent
+  ✓ Pattern "/.env.local" correctly blocked
+[ENV PROTECTION] 2025-06-16T14:37:48.518Z - Blocked .env access attempt:
+  IP: 127.0.0.1
+  URL: /.env.production
+  User-Agent: test-agent
+  ✓ Pattern "/.env.production" correctly blocked
+[ENV PROTECTION] 2025-06-16T14:37:48.518Z - Blocked .env access attempt:
+  IP: 127.0.0.1
+  URL: /..%2F.env
+  User-Agent: test-agent
+  ✓ Pattern "/..%2F.env" correctly blocked
+[ENV PROTECTION] 2025-06-16T14:37:48.519Z - Blocked .env access attempt:
+  IP: 127.0.0.1
+  URL: /%2e%65%6e%76
+  User-Agent: test-agent
+  ✓ Pattern "/%2e%65%6e%76" correctly blocked
+[MIGRATION] Starting password migration to bcrypt...
+Error initializing game settings: PostgresError: coluna "max_time" não existe
+    at ErrorResponse (file:///E:/MEMORIA/memoria-premiada2/node_modules/postgres/src/connection.js:794:26)
+    at handle (file:///E:/MEMORIA/memoria-premiada2/node_modules/postgres/src/connection.js:480:6)
+    at Socket.data (file:///E:/MEMORIA/memoria-premiada2/node_modules/postgres/src/connection.js:315:9)
+    at Socket.emit (node:events:518:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)
+    at Readable.push (node:internal/streams/readable:390:5)
+    at TCP.onStreamRead (node:internal/stream_base_commons:190:23) {
+  severity_local: 'ERRO',
+  severity: 'ERROR',
+  code: '42703',
+  position: '14',
+  file: 'parse_relation.c',
+  line: '3721',
+  routine: 'errorMissingColumn'
+}
+[MIGRATION] Password migration failed: PostgresError: coluna "total_earnings" não existe
+    at ErrorResponse (file:///E:/MEMORIA/memoria-premiada2/node_modules/postgres/src/connection.js:794:26)
+    at handle (file:///E:/MEMORIA/memoria-premiada2/node_modules/postgres/src/connection.js:480:6)
+    at Socket.data (file:///E:/MEMORIA/memoria-premiada2/node_modules/postgres/src/connection.js:315:9)
+    at Socket.emit (node:events:518:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)
+    at Readable.push (node:internal/streams/readable:390:5)
+    at TCP.onStreamRead (node:internal/stream_base_commons:190:23) {
+  severity_local: 'ERRO',
+  severity: 'ERROR',
+  code: '42703',
+  position: '113',
+  file: 'parse_relation.c',
+  line: '3721',
+  routine: 'errorMissingColumn'
+}
+[ERROR] Authentication error - Type: Error - Safe message: Operation failed
+11:37:48 AM [express] serving on port 5000

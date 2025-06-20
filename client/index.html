@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jogo da Memória 3D</title>
+    <meta name="description" content="Jogo da memória 3D profissional estilo cassino. Encontre os pares e ganhe prêmios em dinheiro real!" />
+    
+    <!-- Preload critical fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    
+    <!-- CSS Variables for theming -->
+    <style>
+      :root {
+        --radius: 0.5rem;
+        --background: 222.2 84% 4.9%;
+        --foreground: 210 40% 98%;
+        --card: 222.2 84% 4.9%;
+        --card-foreground: 210 40% 98%;
+        --popover: 222.2 84% 4.9%;
+        --popover-foreground: 210 40% 98%;
+        --primary: 210 40% 98%;
+        --primary-foreground: 222.2 84% 4.9%;
+        --secondary: 217.2 32.6% 17.5%;
+        --secondary-foreground: 210 40% 98%;
+        --muted: 217.2 32.6% 17.5%;
+        --muted-foreground: 215 20.2% 65.1%;
+        --accent: 217.2 32.6% 17.5%;
+        --accent-foreground: 210 40% 98%;
+        --destructive: 0 62.8% 30.6%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 217.2 32.6% 17.5%;
+        --input: 217.2 32.6% 17.5%;
+        --ring: 212.7 26.8% 83.9%;
+        --chart-1: 220 70% 50%;
+        --chart-2: 160 60% 45%;
+        --chart-3: 30 80% 55%;
+        --chart-4: 280 65% 60%;
+        --chart-5: 340 75% 55%;
+        --sidebar-background: 222.2 84% 4.9%;
+        --sidebar-foreground: 210 40% 98%;
+        --sidebar-primary: 210 40% 98%;
+        --sidebar-primary-foreground: 222.2 84% 4.9%;
+        --sidebar-accent: 217.2 32.6% 17.5%;
+        --sidebar-accent-foreground: 210 40% 98%;
+        --sidebar-border: 217.2 32.6% 17.5%;
+        --sidebar-ring: 212.7 26.8% 83.9%;
+      }
+      
+      * {
+        box-sizing: border-box;
+      }
+      
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #0f0f23 100%);
+      }
+      
+      /* Loading screen */
+      .loading-screen {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #0f0f23 100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        color: white;
+      }
+      
+      .loading-spinner {
+        width: 50px;
+        height: 50px;
+        border: 3px solid rgba(255, 212, 0, 0.3);
+        border-top: 3px solid #ffd400;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-bottom: 20px;
+      }
+      
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      
+      .loading-text {
+        font-size: 18px;
+        font-weight: 600;
+        color: #ffd400;
+        text-align: center;
+      }
+      
+      .loading-logo {
+        max-width: 200px;
+        max-height: 80px;
+        object-fit: contain;
+        margin-bottom: 20px;
+      }
+      
+      /* Disable text selection on game elements */
+      .game-ui {
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+      }
+      
+      /* Ensure proper canvas rendering */
+      canvas {
+        display: block;
+        outline: none;
+        touch-action: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="loading-screen">
+        <img id="loading-logo" class="loading-logo" src="" alt="Logo" style="display: none;" />
+        <div class="loading-spinner"></div>
+        <div class="loading-text" id="loading-text">
+          Carregando...<br>
+          <small style="opacity: 0.7; font-size: 14px;">Preparando sistema</small>
+        </div>
+      </div>
+    </div>
+    
+    <script>
+      // Load site settings and apply favicon, logo, and title
+      fetch('/api/site-settings')
+        .then(response => response.json())
+        .then(settings => {
+          // Update title
+          if (settings.siteName) {
+            document.title = settings.siteName;
+          }
+          
+          // Update favicon
+          if (settings.favicon) {
+            const faviconLink = document.querySelector("link[rel~='icon']");
+            if (faviconLink) {
+              faviconLink.href = settings.favicon;
+            } else {
+              const newFaviconLink = document.createElement('link');
+              newFaviconLink.rel = 'icon';
+              newFaviconLink.href = settings.favicon;
+              document.head.appendChild(newFaviconLink);
+            }
+          }
+          
+          // Update loading logo
+          if (settings.logoLight) {
+            const logoImg = document.getElementById('loading-logo');
+            const loadingText = document.getElementById('loading-text');
+            
+            logoImg.src = settings.logoLight;
+            logoImg.style.display = 'block';
+            loadingText.style.display = 'none';
+          }
+        })
+        .catch(error => {
+          console.log('Failed to load site settings:', error);
+        });
+    </script>
+    
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

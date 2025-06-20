@@ -1,0 +1,38 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+
+# Environment variables and sensitive files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+*.env
+
+# Security and credentials
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Logs and debugging
+*.log
+logs/
+debug/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.backup
+*.bak
+*.tmp
