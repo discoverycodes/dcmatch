@@ -260,13 +260,12 @@ class PrimepagService {
         },
         body: JSON.stringify({
           value_cents: Math.round(request.amount * 100), // Valor em centavos
-          description: request.description,
-          external_id: request.external_id,
+          initiation_type: 'dict', // Tipo de iniciação, pode ser 'dict' ou 'manual'          
+          receiver_name: "John Doe", // Nome do destinatário
+          idempotent_id: request.external_id, // ID único para evitar duplicação
+          pix_key_type: 'cpf', // Tipo de chave PIX, pode ser 'cpf', 'cnpj', 'email', etc.
           pix_key: request.pix_key,
-          recipient: {
-            name: request.recipient.name,
-            document: request.recipient.document
-          }
+          authorized: true
         })
       });
 

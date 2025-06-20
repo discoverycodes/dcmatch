@@ -11,6 +11,8 @@
 
 import crypto from 'crypto';
 import { storage } from "./database-storage";
+import { db } from './db';
+import { gameSettings } from '../shared/schema';
 
 interface HashGameState {
   sessionId: string;
@@ -107,12 +109,12 @@ export class HashOnlyValidator {
    * Valida resultado usando análise comportamental
    * NUNCA compara cartas específicas - apenas padrões humanos
    */
-  validateGameResult(result: GameResult): {
+  async validateGameResult(result: GameResult): Promise<{
     valid: boolean;
     winAmount: number;
     reason?: string;
     trustScore: number;
-  } {
+  }> {
     const gameState = this.games.get(result.sessionId);
     if (!gameState) {
       return { valid: false, winAmount: 0, reason: 'Game session not found', trustScore: 0 };
@@ -149,7 +151,7 @@ if (result.won && result.totalTime < minHumanTime) {
     }
     
     // 3. Cálculo de ganhos baseado em confiança
-    const baseWinAmount = this.calculateWinAmount(gameState.betAmount, result.matchedPairs, result.totalTime);
+    const baseWinAmount = await this.calculateWinAmount(gameState.betAmount, result.matchedPairs, result.totalTime);
     const adjustedWinAmount = baseWinAmount;
     
     console.log(`[HASH VALIDATOR] Game validated - Session: ${result.sessionId}, Trust: ${trustScore.toFixed(2)}, Win: ${adjustedWinAmount}`);
@@ -263,13 +265,12 @@ if (result.won && result.totalTime < minHumanTime) {
   /**
    * Calcula ganhos baseado na performance
    */
-
-
-  private calculateWinAmount(betAmount: number, matchedPairs: number, gameTime: number): number {
+  private async calculateWinAmount(betAmount: number, matchedPairs: number, gameTime: number): Promise<number> {
     if (matchedPairs < 8) return 0; // Não ganhou
     
-    const baseMultiplier = 2.0; // 2x da aposta
-
+    // Busca o multiplicador da tabela game_settings
+    const settings = await db.select().from(gameSettings).limit(1);
+    const baseMultiplier = settings.length > 0 ? parseFloat(settings[0].winMultiplier) : 2.0;
     
     return Math.floor(betAmount * baseMultiplier);
   }

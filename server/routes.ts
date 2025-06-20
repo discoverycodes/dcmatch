@@ -17,6 +17,8 @@ import { gameValidator } from "./game-state-validator";
 import { cryptoGameValidator } from "./crypto-game-validator";
 import { hashOnlyValidator } from "./hash-only-validator";
 import { sessionCleaner } from "./session-cleaner";
+import { sanitizeInput, secureTransactionSchema, pixKeySchema, walletAddressSchema } from "./input-validator";
+import { rateLimiter } from "./rate-limiter";
 
 // Validation schemas
 const startGameSchema = z.object({
@@ -464,17 +466,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const sessionId = req.sessionID;
     const isSecure = req.session?.isSecure;
     
-    // Pular validação para rotas públicas
+    // Pular validação para rotas públicas e rotas com autenticação própria
     const publicRoutes = ['/api/auth/login', '/api/auth/register', '/api/site-settings', '/api/captcha', '/api/webhooks'];
+    const selfAuthRoutes = ['/api/user/transactions', '/api/user/balance', '/api/user/game-history'];
     const isPublicRoute = publicRoutes.some(route => req.path.startsWith(route));
+    const isSelfAuthRoute = selfAuthRoutes.some(route => req.path === route);
     
-    if (isPublicRoute) {
+    if (isPublicRoute || isSelfAuthRoute) {
       return next();
     }
     
     // VERIFICAÇÃO RIGOROSA: Sem session = sem acesso
     if (!userId || !sessionId || !isSecure) {
-      console.warn(`[SECURITY] Unauthorized access attempt - Path: ${req.path}, Session: ${sessionId}, User: ${userId}, Secure: ${isSecure}, Headers: ${JSON.stringify(req.headers.cookie)}`);
+      LogSanitizer.logAuth('UNAUTHORIZED_ACCESS', req.ip || 'unknown');
       req.session?.destroy();
       return res.status(401).json({ 
         error: "Authentication required",
@@ -594,7 +598,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Criar pagamento PIX na PRIMEPAG
       const pixPayment = await primepagService.createPixPayment({
         amount: validatedAmount, // Use server-validated amount
-        description: `Depósito ${siteSettings.siteName} - R$ ${validatedAmount}`,
+        description: `Depósito via Pix`,
         external_id: externalId,
         payer: {
           name: user.name || user.username || "User",
@@ -673,18 +677,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: `Valor máximo para saque é R$ ${maxPixWithdrawalLimit.toFixed(2).replace('.', ',')}` });
       }
 
-      // Validar formato da chave PIX
-      if (typeof pixKey !== 'string' || pixKey.length < 5 || pixKey.length > 100) {
-        return res.status(400).json({ error: 'SECURITY: Invalid PIX key format' });
-      }
-
-      // Validar caracteres maliciosos na chave PIX
-      const maliciousPatterns = [';', '--', '/*', '*/', 'DROP', 'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'UNION'];
-      const pixKeyUpper = pixKey.toUpperCase();
-      for (const pattern of maliciousPatterns) {
-        if (pixKeyUpper.includes(pattern)) {
-          return res.status(400).json({ error: 'SECURITY: Invalid characters in PIX key' });
-        }
+      // Validar formato da chave PIX com validador robusto
+      const pixValidation = pixKeySchema.safeParse(pixKey);
+      if (!pixValidation.success) {
+        return res.status(400).json({ error: 'Invalid PIX key format' });
       }
 
       // Get current user and validate balance
@@ -735,7 +731,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         amount: withdrawalAmount,
         balanceBefore: currentBalance,
         balanceAfter: currentBalance - withdrawalAmount, // Deduct immediately
-        description: `PIX withdrawal to ${pixKey}`,
+        description: `Saque via Pix`,
         paymentMethod: 'PIX',
         gameSessionId: null,
         orderNumber: orderNumber,
@@ -906,7 +902,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const invoice = await plisioService.createInvoice({
         currency: currency.toUpperCase(),
         amount: parseFloat(amount),
-        order_name: `Depósito ${siteSettings.siteName} - ${amount} USD`,
+        order_name: `Depósito via USDT`,
         order_number: orderNumber,
         callback_url: `${req.protocol}://${req.get('host')}/api/webhooks/plisio`,
         email: user.email
@@ -1042,7 +1038,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         amount: withdrawalAmount,
         balanceBefore: currentBalance,
         balanceAfter: currentBalance - withdrawalAmount, // Deduct immediately
-        description: `Crypto withdrawal to ${walletAddress}`,
+        description: `Saque via USDT`,
         paymentMethod: `${currency.toUpperCase()} BEP-20`,
         gameSessionId: null,
         orderNumber: orderNumber,
@@ -1319,8 +1315,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req as any).session?.userId;
       
+      // Remover logs sensíveis de debugging
+      
       if (!userId) {
-        return res.status(401).json({ error: "Authentication required" });
+        return res.status(401).json({ error: "Authentication required", code: "NO_SESSION" });
       }
 
       // SECURITY: Validate user ID and prevent manipulation
@@ -1329,22 +1327,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Invalid user ID" });
       }
 
-      // SECURITY: Rate limiting for transaction queries
-      const userAgent = req.get('User-Agent') || 'unknown';
-      const clientIP = req.ip || req.connection.remoteAddress;
-      
       // Get transactions with server-side validation
       const transactions = await storage.getUserTransactions(validUserId);
       
       // SECURITY: Filter and sanitize transaction data server-side
       const sanitizedTransactions = transactions.map(transaction => {
-        // Calculate server-side hash for integrity verification
-        const transactionHash = require('crypto')
-          .createHash('sha256')
-          .update(`${transaction.id}${transaction.userId}${transaction.amount}${transaction.type}`)
-          .digest('hex')
-          .substring(0, 8);
-
         return {
           id: transaction.id,
           type: transaction.type,
@@ -1353,17 +1340,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           createdAt: transaction.createdAt,
           description: transaction.description?.replace(/external:/g, '') || '', // Remove sensitive prefixes
           paymentMethod: transaction.paymentMethod || null,
-          payment_method: transaction.paymentMethod || null, // Compatibility
-          integrity_hash: transactionHash // Server-generated integrity hash
+          method: transaction.paymentMethod || null // Frontend expects 'method' field
         };
       });
 
-      // Log transaction access for security monitoring
-      console.log(`[SECURITY] User ${validUserId} accessed ${sanitizedTransactions.length} transactions from ${clientIP}`);
+      LogSanitizer.logFinancial('Transactions accessed', validUserId);
       
       res.json(sanitizedTransactions);
     } catch (error) {
-      console.error('[SECURITY] Transaction access error:', error);
+      LogSanitizer.logError('Transaction access failed', error as Error);
       res.status(500).json({ error: "Failed to get transactions" });
     }
   });
@@ -1520,7 +1505,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           amount: 1.0,
           balanceBefore: currentBalance,
           balanceAfter: newBalance,
-          description: `Bônus de indicação - Código: ${referralCode} (não sacável)`,
+          description: `Bônus De Cadastro`,
           gameSessionId: null
         });
 
@@ -1771,7 +1756,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('ADMIN PASSWORD CHANGED!');
       console.log('New password hash:', newHashedPassword);
       console.log('Please update your .env file with:');
-      console.log(`ADMIN_PASSWORD_HASH=${newHashedPassword}`);
+      // Hash seguro salvo - não logar senhas em produção
       console.log('='.repeat(80));
 
       res.json({ 
@@ -1779,13 +1764,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: "Admin password updated successfully. Please update your .env file with the new hash shown in server logs." 
       });
     } catch (error) {
-      console.error('Change admin password error:', error);
+      LogSanitizer.logError('Admin password change failed', error as Error);
       res.status(500).json({ error: "Failed to change admin password" });
     }
   });
 
   // Admin Authentication
-  app.post("/api/admin/login", (req, res, next) => rateLimitAuth(req, res, next, 'admin'), async (req, res) => {
+  app.post("/api/admin/login", rateLimiter.createMiddleware('auth', 3, 15 * 60 * 1000), async (req, res) => {
     try {
       const { username, password } = req.body;
       
@@ -1806,7 +1791,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // For now, use direct comparison with default password
         if (username === adminUsername && password === defaultPassword) {
-          (req as any).rateLimitTracker.clearAttempts();
+          (req as any).rateLimit.reset();
           (req as any).session.isAdmin = true;
           (req as any).session.adminId = 1;
           
@@ -1826,7 +1811,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (username === adminUsername) {
         const passwordMatch = await bcrypt.compare(password, adminPasswordHash);
         if (passwordMatch) {
-          (req as any).rateLimitTracker.clearAttempts();
+          (req as any).rateLimit.reset();
           // Set admin session
           (req as any).session.isAdmin = true;
           (req as any).session.adminId = 1;
@@ -1841,7 +1826,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           res.status(401).json({ error: 'Invalid admin credentials' });
         }
       } else {
-        (req as any).rateLimitTracker.incrementFailed();
+        (req as any).rateLimit.increment();
         res.status(401).json({ error: 'Invalid admin credentials' });
       }
     } catch (error) {
@@ -2190,7 +2175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         amount: betAmount,
         balanceBefore: currentBalance,
         balanceAfter: newBalance,
-        description: `SECURE: Memory game bet - Session ${actualSessionId}`,
+        description: `Aposta - Jogo da Memória`,
         gameSessionId: actualSessionId
       });
 
@@ -2228,7 +2213,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               amount: commissionAmount,
               balanceBefore: referrerCurrentBalance,
               balanceAfter: referrerNewBalance,
-              description: `Bônus de afiliado - ${user.username} apostou R$ ${betAmount.toFixed(2)} (não sacável)`,
+              description: `Comissão de Indicação`,
               gameSessionId: actualSessionId
             });
 
@@ -2296,7 +2281,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         won
       };
 
-      const validation = hashOnlyValidator.validateGameResult(gameResult);
+      const validation = await hashOnlyValidator.validateGameResult(gameResult);
 
       if (!validation.valid) {
         console.error(`[HASH VALIDATION] Validation failed:`, validation.reason);
@@ -2346,7 +2331,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           amount: validation.winAmount,
           balanceBefore: currentBalance,
           balanceAfter: newBalance,
-          description: `HASH WIN: Memory game - ${matchedPairs}/8 pairs - Trust: ${validation.trustScore.toFixed(2)} - Session ${sessionId}`,
+          description: `Vitória - Jogo da Memória`,
           gameSessionId: sessionId
         });
       }

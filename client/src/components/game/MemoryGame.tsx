@@ -286,7 +286,7 @@ export default function MemoryGame() {
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center h-full p-2 sm:p-4 md:p-8 relative z-10 pt-20 pb-20 sm:pb-8 game-container">
-          <div className="relative w-full max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg mx-auto">
+          <div className="relative w-full max-w-sm sm:max-w-sm md:max-w-md lg:max-w-lg mx-auto">
             
             {/* Game Stats - Fixed above grid during gameplay */}
             {gameState.phase === 'playing' && (
@@ -417,8 +417,8 @@ export default function MemoryGame() {
                     {card.isFlipped || card.isMatched ? (
                       <span className={`transition-all duration-300 ${
                         card.isMatched 
-                          ? 'text-yellow-300 text-2xl sm:text-3xl md:text-4xl lg:text-5xl animate-bounce-gentle drop-shadow-lg' 
-                          : 'text-white text-2xl sm:text-3xl md:text-4xl drop-shadow-md'
+                          ? 'text-yellow-300 text-4xl sm:text-3xl md:text-4xl lg:text-5xl animate-bounce-gentle drop-shadow-lg' 
+                          : 'text-white text-3xl sm:text-3xl md:text-4xl drop-shadow-md'
                       }`}>
                         {card.icon}
                       </span>

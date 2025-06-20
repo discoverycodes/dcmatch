@@ -37,10 +37,10 @@ app.use(session({
   saveUninitialized: false,
   rolling: true, // Reset expiry on each request
   cookie: {
-    secure: false,
+    secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
-    maxAge: 30 * 60 * 1000, // 30 minutos - força relogin frequente
-    sameSite: 'lax'
+    maxAge: 15 * 60 * 1000, // 15 minutos - mais seguro
+    sameSite: 'strict'
   },
   name: 'memoria-premiada-session',
   genid: () => {
