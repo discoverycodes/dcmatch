@@ -37,6 +37,7 @@ interface PrimepagPixWithdrawalRequest {
   description: string;
   external_id: string;
   pix_key: string;
+  pix_key_type: 'cpf' | 'cnpj' | 'email' | 'phone' | 'random';
   recipient: {
     name: string;
     document: string;
@@ -247,9 +248,34 @@ class PrimepagService {
   async createPixWithdrawal(request: PrimepagPixWithdrawalRequest): Promise<PrimepagPixWithdrawalResponse> {
     try {
       await this.loadConfig();
-      console.log('[PRIMEPAG] Creating PIX withdrawal:', request);
+      console.log('[PRIMEPAG] Creating automatic PIX withdrawal:', request);
 
       const token = await this.getToken();
+      
+      // Formatar chave PIX baseado no tipo selecionado pelo usuário
+      const formattedPixKey = this.formatPixKey(request.pix_key, request.pix_key_type);
+      
+      // Generate unique idempotent_id if not provided
+      const idempotentId = request.external_id || `pix_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Conforme documentação Primepag: https://developers-stg.primepag.com.br/docs/payment/payment-register
+      const pixPaymentData = {
+        value_cents: Math.round(request.amount * 100), // Valor em centavos
+        initiation_type: 'dict', // Usando chave PIX do dicionário
+        receiver_name: request.recipient.name.trim(),
+        receiver_document: request.recipient.document.replace(/\D/g, ''), // Remove formatação
+        pix_key_type: request.pix_key_type.toLowerCase(),
+        pix_key: formattedPixKey.trim(),
+        description: request.description.trim(),
+        idempotent_id: idempotentId,
+        authorized: true // Auto-autorizar o pagamento
+      };
+
+      console.log('[PRIMEPAG] Idempotent ID:', idempotentId);
+      console.log('[PRIMEPAG] PIX Key Type:', request.pix_key_type);
+      console.log('[PRIMEPAG] PIX Key:', formattedPixKey);
+
+      console.log('[PRIMEPAG] Withdrawal payload:', pixPaymentData);
       
       const response = await fetch(`${this.baseUrl}/v1/pix/payments`, {
         method: 'POST',
@@ -258,44 +284,96 @@ class PrimepagService {
           'Accept': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({
-          value_cents: Math.round(request.amount * 100), // Valor em centavos
-          initiation_type: 'dict', // Tipo de iniciação, pode ser 'dict' ou 'manual'          
-          receiver_name: "John Doe", // Nome do destinatário
-          idempotent_id: request.external_id, // ID único para evitar duplicação
-          pix_key_type: 'cpf', // Tipo de chave PIX, pode ser 'cpf', 'cnpj', 'email', etc.
-          pix_key: request.pix_key,
-          authorized: true
-        })
+        body: JSON.stringify(pixPaymentData)
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[PRIMEPAG] PIX withdrawal API error:', response.status, errorText);
-        
+      const responseText = await response.text();
+      console.log('[PRIMEPAG] Withdrawal response:', response.status, responseText);
 
-        
-        throw new Error(`Primepag withdrawal error: ${response.status} - ${errorText}`);
+      if (!response.ok) {
+        console.error('[PRIMEPAG] PIX withdrawal API error:', response.status, responseText);
+        throw new Error(`Primepag withdrawal error: ${response.status} - ${responseText}`);
       }
 
-      const data = await response.json();
-      console.log('[PRIMEPAG] PIX withdrawal created successfully:', data.id);
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        console.error('[PRIMEPAG] Invalid JSON response:', responseText);
+        throw new Error('Invalid response from Primepag API');
+      }
+
+      console.log('[PRIMEPAG] PIX withdrawal created successfully:', data);
 
       return {
-        id: data.id,
-        amount: data.amount / 100,
-        description: data.description,
-        status: data.status,
-        pix_key: data.pix_key,
-        external_id: data.external_id,
-        created_at: data.created_at,
-        recipient: data.recipient
+        id: data.id || data.payment_id,
+        amount: (data.value_cents || data.amount) / 100,
+        description: request.description,
+        status: data.status || 'processing',
+        pix_key: request.pix_key,
+        external_id: request.external_id,
+        created_at: data.created_at || new Date().toISOString(),
+        recipient: request.recipient
       };
 
     } catch (error) {
       console.error('[PRIMEPAG] Error creating PIX withdrawal:', error);
       throw error;
     }
+  }
+
+  // Formatar chave PIX baseado no tipo selecionado pelo usuário
+  public formatPixKey(pixKey: string, pixKeyType: string): string {
+    switch (pixKeyType) {
+      case 'cpf':
+      case 'cnpj':
+        // Remove toda formatação para CPF/CNPJ
+        return pixKey.replace(/\D/g, '');
+      
+      case 'email':
+        // Email mantém formatação original, apenas trim
+        return pixKey.trim().toLowerCase();
+      
+      case 'phone':
+        // Formatar telefone com +55 se necessário
+        return this.formatPhoneNumber(pixKey);
+      
+      case 'random':
+        // Chave aleatória mantém formatação original
+        return pixKey.trim();
+      
+      default:
+        return pixKey.trim();
+    }
+  }
+
+  // Formatar número de telefone com +55
+  private formatPhoneNumber(phone: string): string {
+    // Remove todos os caracteres não numéricos
+    let cleanPhone = phone.replace(/\D/g, '');
+    
+    // Se já tem código do país (+55), retorna como está
+    if (phone.startsWith('+55')) {
+      return phone.replace(/\D/g, '').replace(/^/, '+');
+    }
+    
+    // Se tem 55 no início mas sem +, adiciona o +
+    if (cleanPhone.startsWith('55') && cleanPhone.length >= 12) {
+      return '+' + cleanPhone;
+    }
+    
+    // Se não tem código do país, adiciona +55
+    if (cleanPhone.length === 10 || cleanPhone.length === 11) {
+      return '+55' + cleanPhone;
+    }
+    
+    // Se tem 13 dígitos e começa com 55, adiciona +
+    if (cleanPhone.length === 13 && cleanPhone.startsWith('55')) {
+      return '+' + cleanPhone;
+    }
+    
+    // Caso padrão: adiciona +55 se não conseguiu detectar
+    return '+55' + cleanPhone;
   }
 
   async checkPixPayment(paymentId: string): Promise<PrimepagPixResponse> {

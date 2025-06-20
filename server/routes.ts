@@ -750,6 +750,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         description: `Saque ${siteSettings.siteName} - R$ ${withdrawalAmount}`,
         external_id: orderNumber,
         pix_key: pixKey,
+        pix_key_type: 'cpf' as 'cpf' | 'cnpj' | 'email' | 'phone' | 'random', // Default to CPF for backward compatibility
         recipient: {
           name: user.name || user.username || "User",
           document: user.cpf || "00000000000"
@@ -1085,6 +1086,139 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error('[PLISIO] Error creating withdrawal:', error);
       res.status(500).json({ 
         error: "Failed to create crypto withdrawal",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Criar saque PIX via Primepag
+  app.post("/api/payments/pix/withdraw", async (req, res) => {
+    try {
+      const { amount, pixKey, pixKeyType, recipientName, recipientDocument } = req.body;
+      const userId = (req as any).user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      if (!amount || !pixKey || !pixKeyType || !recipientName || !recipientDocument) {
+        return res.status(400).json({ error: 'Todos os campos são obrigatórios: amount, pixKey, pixKeyType, recipientName, recipientDocument' });
+      }
+
+      // Validar tipo de chave PIX
+      const validPixKeyTypes = ['cpf', 'cnpj', 'email', 'phone', 'random'];
+      if (!validPixKeyTypes.includes(pixKeyType)) {
+        return res.status(400).json({ error: 'Tipo de chave PIX inválido. Use: cpf, cnpj, email, phone, ou random' });
+      }
+
+      const withdrawalAmount = parseFloat(amount);
+      if (isNaN(withdrawalAmount) || withdrawalAmount <= 0) {
+        return res.status(400).json({ error: "Invalid withdrawal amount" });
+      }
+
+      // Carregar configurações e validar limites
+      const primepagConfig = await storage.getPaymentSettings('primepag');
+      const minWithdrawalAmount = primepagConfig?.minWithdrawalAmount || 10;
+      const maxWithdrawalAmount = primepagConfig?.maxWithdrawalAmount || 10000;
+
+      if (withdrawalAmount < minWithdrawalAmount) {
+        return res.status(400).json({ error: `Valor mínimo para saque é R$ ${minWithdrawalAmount.toFixed(2)}` });
+      }
+
+      if (withdrawalAmount > maxWithdrawalAmount) {
+        return res.status(400).json({ error: `Valor máximo para saque é R$ ${maxWithdrawalAmount.toFixed(2)}` });
+      }
+
+      // Verificar saldo do usuário
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const currentBalance = parseFloat(String(user.balance || "0")) || 0;
+      if (currentBalance < withdrawalAmount) {
+        return res.status(400).json({ error: "Saldo insuficiente" });
+      }
+
+      // Verificar saldo sacável
+      const balanceInfo = await storage.calculateWithdrawableBalance(userId);
+      if (withdrawalAmount > balanceInfo.withdrawable) {
+        return res.status(400).json({
+          error: 'Saldo insuficiente para saque',
+          details: {
+            requested: withdrawalAmount,
+            withdrawable: balanceInfo.withdrawable,
+            message: 'Você só pode sacar o valor que ganhou menos o que já foi sacado.'
+          }
+        });
+      }
+
+      LogSanitizer.logFinancial('PIX withdrawal approved', userId);
+
+      // Generate unique order number
+      const { generateOrderNumber } = await import('./order-generator');
+      const orderNumber = generateOrderNumber();
+      
+      // Create withdrawal transaction
+      const transaction = await storage.createTransaction({
+        userId,
+        type: 'withdrawal',
+        amount: withdrawalAmount,
+        balanceBefore: currentBalance,
+        balanceAfter: currentBalance - withdrawalAmount,
+        description: `Saque via PIX`,
+        paymentMethod: 'PIX',
+        gameSessionId: null,
+        orderNumber: orderNumber,
+        externalTxnId: `pix_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        status: 'pending'
+      });
+
+      // Update user balance immediately
+      await storage.updateUserBalance(userId, currentBalance - withdrawalAmount);
+      
+      // Record withdrawal amount
+      await storage.recordWithdrawalAmount(userId, withdrawalAmount);
+
+      // Create PIX withdrawal via Primepag
+      const withdrawal = await primepagService.createPixWithdrawal({
+        amount: withdrawalAmount,
+        description: `Saque PIX - ${orderNumber}`,
+        external_id: transaction.externalTxnId,
+        pix_key: pixKey,
+        pix_key_type: pixKeyType as 'cpf' | 'cnpj' | 'email' | 'phone' | 'random',
+        recipient: {
+          name: recipientName,
+          document: recipientDocument
+        }
+      });
+
+      // Update transaction with Primepag withdrawal data
+      await storage.updateTransaction(transaction.id.toString(), {
+        externalTxnId: withdrawal.id,
+        status: 'processing',
+        metadata: JSON.stringify({
+          primepag_payment_id: withdrawal.id,
+          pix_key: pixKey,
+          recipient_name: recipientName,
+          order_number: orderNumber,
+          withdrawal_initiated_at: new Date().toISOString()
+        })
+      });
+
+      console.log('[PRIMEPAG] PIX withdrawal created:', withdrawal.id);
+
+      res.json({
+        success: true,
+        message: 'Saque PIX processado com sucesso',
+        transaction_id: transaction.id,
+        payment_id: withdrawal.id
+      });
+
+    } catch (error) {
+      console.error('[PRIMEPAG] Error creating PIX withdrawal:', error);
+      res.status(500).json({ 
+        error: "Failed to create PIX withdrawal",
         details: error instanceof Error ? error.message : 'Unknown error'
       });
     }

@@ -8,6 +8,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { QrCode, Copy, CreditCard, Wallet, ArrowUpRight, ArrowDownLeft, Clock, CheckCircle, XCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import Header from '../components/ui/Header';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Alert, AlertDescription } from '../components/ui/alert';
 
 interface PaymentMethod {
   id: string;
@@ -44,8 +46,12 @@ export default function PaymentInterface() {
   const [amount, setAmount] = useState('');
   const [walletAddress, setWalletAddress] = useState('');
   const [pixKey, setPixKey] = useState('');
+  const [pixKeyType, setPixKeyType] = useState<'cpf' | 'cnpj' | 'email' | 'phone' | 'random'>('cpf');
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientDocument, setRecipientDocument] = useState('');
   const [paymentData, setPaymentData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [showPixForm, setShowPixForm] = useState(false);
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -349,27 +355,16 @@ export default function PaymentInterface() {
       return;
     }
 
-    // Validate required fields based on payment method type
-    if (selectedMethod.type === 'crypto' && !walletAddress) {
-      toast.error('Endereço da carteira é obrigatório');
-      return;
-    }
-
-    if (selectedMethod.type === 'pix' && !pixKey) {
-      toast.error('Chave PIX é obrigatória');
-      return;
-    }
-
     setLoading(true);
     try {
       let response;
 
       if (selectedMethod.type === 'crypto') {
-        console.log('Creating crypto withdrawal...', {
-          amount: parseFloat(amount),
-          currency: selectedMethod.currency,
-          walletAddress
-        });
+        // Validate required fields for crypto withdrawals
+        if (!walletAddress) {
+          toast.error('Endereço da carteira é obrigatório');
+          return;
+        }
 
         response = await fetch('/api/payments/crypto/withdraw', {
           method: 'POST',
@@ -383,10 +378,11 @@ export default function PaymentInterface() {
           }),
         });
       } else if (selectedMethod.type === 'pix') {
-        console.log('Creating PIX withdrawal...', {
-          amount: parseFloat(amount),
-          pixKey
-        });
+        // Validate required fields for PIX withdrawals
+        if (!pixKey || !recipientName || !recipientDocument) {
+          toast.error('Todos os campos PIX são obrigatórios');
+          return;
+        }
 
         response = await fetch('/api/payments/pix/withdraw', {
           method: 'POST',
@@ -395,7 +391,10 @@ export default function PaymentInterface() {
           },
           body: JSON.stringify({
             amount: parseFloat(amount),
-            pixKey
+            pixKey,
+            pixKeyType,
+            recipientName,
+            recipientDocument
           }),
         });
       }
@@ -441,11 +440,78 @@ export default function PaymentInterface() {
     }
   };
 
+  const handlePixWithdrawal = async (pixData: {
+    amount: number;
+    pixKey: string;
+    pixKeyType: 'cpf' | 'cnpj' | 'email' | 'phone' | 'random';
+    recipientName: string;
+    recipientDocument: string;
+  }) => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/payments/pix/withdraw', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          amount: pixData.amount,
+          pixKey: pixData.pixKey,
+          pixKeyType: pixData.pixKeyType,
+          recipientName: pixData.recipientName,
+          recipientDocument: pixData.recipientDocument
+        }),
+      });
+
+      if (!response.ok) {
+        let errorData = { error: 'Erro de conexão' };
+        try {
+          errorData = await response.json();
+        } catch (e) {
+          errorData = { error: `HTTP ${response.status}` };
+        }
+        console.error('PIX Withdrawal API error:', errorData);
+        throw new Error(errorData.error || 'Erro ao processar saque PIX');
+      }
+
+      const withdrawalData = await response.json();
+      console.log('PIX Withdrawal created successfully:', withdrawalData);
+      
+      toast.success(withdrawalData.message || 'Saque PIX processado com sucesso!');
+      setShowPaymentModal(false);
+      setShowPixForm(false);
+      
+      // Refresh user balance
+      await fetchUserBalance();
+      
+      // Add new transaction to history
+      const newTransaction: Transaction = {
+        id: withdrawalData.transaction_id || `pix_withdrawal_${Date.now()}`,
+        type: 'withdrawal',
+        amount: pixData.amount,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        payment_method: 'PIX'
+      };
+      setTransactions(prev => [newTransaction, ...prev]);
+      
+      resetForm();
+    } catch (error) {
+      toast.error('Erro ao criar saque PIX');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const resetForm = () => {
     setAmount('');
     setWalletAddress('');
     setPixKey('');
+    setPixKeyType('cpf');
+    setRecipientName('');
+    setRecipientDocument('');
     setPaymentData(null);
+    setShowPixForm(false);
   };
 
   const openPaymentModal = (method: PaymentMethod, type: 'deposit' | 'withdrawal') => {
@@ -857,16 +923,95 @@ export default function PaymentInterface() {
                 )}
 
                 {activeTab === 'withdrawal' && selectedMethod?.type === 'pix' && (
-                  <div>
-                    <label className="block text-sm font-medium mb-1">CPF (Chave PIX)</label>
-                    <Input
-                      placeholder="000.000.000-00"
-                      value={pixKey}
-                      onChange={(e) => setPixKey(e.target.value)}
-                      maxLength={14}
-                    />
-                    <div className="text-xs text-gray-500 mt-1">
-                      Para saques via PIX, use seu CPF como chave PIX
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Tipo de Chave PIX</label>
+                      <Select value={pixKeyType} onValueChange={(value: 'cpf' | 'cnpj' | 'email' | 'phone' | 'random') => {
+                        setPixKeyType(value);
+                        setPixKey('');
+                      }}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione o tipo de chave PIX" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="cpf">
+                            <div>
+                              <div className="font-medium">CPF</div>
+                              <div className="text-sm text-gray-500">Documento de pessoa física (11 dígitos)</div>
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="cnpj">
+                            <div>
+                              <div className="font-medium">CNPJ</div>
+                              <div className="text-sm text-gray-500">Documento de pessoa jurídica (14 dígitos)</div>
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="email">
+                            <div>
+                              <div className="font-medium">E-mail</div>
+                              <div className="text-sm text-gray-500">Endereço de e-mail válido</div>
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="phone">
+                            <div>
+                              <div className="font-medium">Telefone</div>
+                              <div className="text-sm text-gray-500">Número de celular (será formatado com +55)</div>
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="random">
+                            <div>
+                              <div className="font-medium">Chave Aleatória</div>
+                              <div className="text-sm text-gray-500">Chave UUID gerada pelo banco</div>
+                            </div>
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Chave PIX</label>
+                      <Input
+                        type="text"
+                        value={pixKey}
+                        onChange={(e) => setPixKey(e.target.value)}
+                        placeholder={
+                          pixKeyType === 'cpf' ? '000.000.000-00' :
+                          pixKeyType === 'cnpj' ? '00.000.000/0000-00' :
+                          pixKeyType === 'email' ? 'seu@email.com' :
+                          pixKeyType === 'phone' ? '(11) 99999-9999' :
+                          'chave-aleatoria-uuid'
+                        }
+                      />
+                      {pixKeyType === 'phone' && (
+                        <p className="text-blue-600 text-sm mt-1">
+                          O número será automaticamente formatado com +55
+                        </p>
+                      )}
+                      {(pixKeyType === 'cpf' || pixKeyType === 'cnpj') && (
+                        <p className="text-blue-600 text-sm mt-1">
+                          Apenas números, formatação será removida automaticamente
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Nome do Destinatário</label>
+                      <Input
+                        type="text"
+                        value={recipientName}
+                        onChange={(e) => setRecipientName(e.target.value)}
+                        placeholder="Nome completo do destinatário"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Documento do Destinatário</label>
+                      <Input
+                        type="text"
+                        value={recipientDocument}
+                        onChange={(e) => setRecipientDocument(e.target.value)}
+                        placeholder="CPF ou CNPJ do destinatário"
+                      />
                     </div>
                   </div>
                 )}
@@ -880,7 +1025,7 @@ export default function PaymentInterface() {
                     parseFloat(amount || '0') <= 0 ||
                     !!validateAmount(amount, selectedMethod, activeTab as 'deposit' | 'withdrawal') ||
                     (activeTab === 'withdrawal' && selectedMethod.type === 'crypto' && !walletAddress) ||
-                    (activeTab === 'withdrawal' && selectedMethod.type === 'pix' && !pixKey)
+                    (activeTab === 'withdrawal' && selectedMethod.type === 'pix' && (!pixKey || !recipientName || !recipientDocument))
                   }
                   className="w-full"
                 >
@@ -976,6 +1121,154 @@ export default function PaymentInterface() {
                 </div>
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* PIX Withdrawal Form Dialog */}
+        <Dialog open={showPixForm} onOpenChange={setShowPixForm}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Saque PIX - Selecione sua Chave</DialogTitle>
+            </DialogHeader>
+            
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              if (pixKey && pixKeyType && recipientName && recipientDocument && amount) {
+                handlePixWithdrawal({
+                  amount: parseFloat(amount),
+                  pixKey,
+                  pixKeyType,
+                  recipientName,
+                  recipientDocument
+                });
+              }
+            }} className="space-y-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Valor do Saque (R$)</label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder="0.00"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Tipo de Chave PIX</label>
+                  <Select value={pixKeyType} onValueChange={(value: 'cpf' | 'cnpj' | 'email' | 'phone' | 'random') => {
+                    setPixKeyType(value);
+                    setPixKey('');
+                  }}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o tipo de chave PIX" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cpf">
+                        <div>
+                          <div className="font-medium">CPF</div>
+                          <div className="text-sm text-gray-500">Documento de pessoa física (11 dígitos)</div>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="cnpj">
+                        <div>
+                          <div className="font-medium">CNPJ</div>
+                          <div className="text-sm text-gray-500">Documento de pessoa jurídica (14 dígitos)</div>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="email">
+                        <div>
+                          <div className="font-medium">E-mail</div>
+                          <div className="text-sm text-gray-500">Endereço de e-mail válido</div>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="phone">
+                        <div>
+                          <div className="font-medium">Telefone</div>
+                          <div className="text-sm text-gray-500">Número de celular (será formatado com +55)</div>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="random">
+                        <div>
+                          <div className="font-medium">Chave Aleatória</div>
+                          <div className="text-sm text-gray-500">Chave UUID gerada pelo banco</div>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Chave PIX</label>
+                  <Input
+                    type="text"
+                    value={pixKey}
+                    onChange={(e) => setPixKey(e.target.value)}
+                    placeholder={
+                      pixKeyType === 'cpf' ? '000.000.000-00' :
+                      pixKeyType === 'cnpj' ? '00.000.000/0000-00' :
+                      pixKeyType === 'email' ? 'seu@email.com' :
+                      pixKeyType === 'phone' ? '(11) 99999-9999' :
+                      'chave-aleatoria-uuid'
+                    }
+                    required
+                  />
+                  {pixKeyType === 'phone' && (
+                    <p className="text-blue-600 text-sm mt-1">
+                      O número será automaticamente formatado com +55 se necessário
+                    </p>
+                  )}
+                  {(pixKeyType === 'cpf' || pixKeyType === 'cnpj') && (
+                    <p className="text-blue-600 text-sm mt-1">
+                      Apenas números, formatação será removida automaticamente
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Nome do Destinatário</label>
+                  <Input
+                    type="text"
+                    value={recipientName}
+                    onChange={(e) => setRecipientName(e.target.value)}
+                    placeholder="Nome completo do destinatário"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Documento do Destinatário</label>
+                  <Input
+                    type="text"
+                    value={recipientDocument}
+                    onChange={(e) => setRecipientDocument(e.target.value)}
+                    placeholder="CPF ou CNPJ do destinatário"
+                    required
+                  />
+                </div>
+              </div>
+
+              <Alert>
+                <AlertDescription>
+                  <strong>Importante:</strong> Verifique todas as informações antes de confirmar. 
+                  O saque PIX será processado automaticamente e não poderá ser cancelado.
+                  {pixKeyType === 'phone' && (
+                    <><br /><strong>Telefone:</strong> Será automaticamente formatado com +55 se necessário.</>
+                  )}
+                </AlertDescription>
+              </Alert>
+
+              <Button 
+                type="submit" 
+                className="w-full" 
+                disabled={loading || !amount || !pixKey || !recipientName || !recipientDocument}
+              >
+                {loading ? 'Processando Saque...' : 'Confirmar Saque PIX'}
+              </Button>
+            </form>
           </DialogContent>
         </Dialog>
         </div>

@@ -80,7 +80,7 @@ interface PlisioStatusResponse {
 }
 
 class PlisioService {
-  private baseUrl = 'https://plisio.net/api/v1';
+  private baseUrl = 'https://api.plisio.net/api/v1';
   private secretKey: string;
 
   constructor() {
@@ -89,12 +89,21 @@ class PlisioService {
 
   private async loadConfig(): Promise<void> {
     try {
-      const config = await storage.getPaymentSettings('plisio');
-      this.secretKey = config.secretKey || '';
-      safeLog('info', 'Plisio config loaded', { secretKey: this.secretKey ? 'Present' : 'Missing' });
+      // Prioritize environment variable over database config
+      this.secretKey = process.env.PLISIO_SECRET_KEY || '';
+      
+      if (!this.secretKey) {
+        const config = await storage.getPaymentSettings('plisio');
+        this.secretKey = config?.secretKey || '';
+      }
+      
+      safeLog('info', 'Plisio config loaded', { 
+        secretKey: this.secretKey ? 'Present' : 'Missing',
+        source: process.env.PLISIO_SECRET_KEY ? 'Environment' : 'Database'
+      });
     } catch (error) {
       console.error('[PLISIO] Error loading config:', error);
-      this.secretKey = '';
+      this.secretKey = process.env.PLISIO_SECRET_KEY || '';
     }
   }
 
@@ -363,7 +372,7 @@ class PlisioService {
     }
   }
 
-  // Método para criar saque/payout
+  // Método para criar saque/payout automático
   async createWithdrawal(withdrawalData: {
     currency: string;
     amount: number; // Valor em BRL
@@ -373,89 +382,59 @@ class PlisioService {
   }): Promise<any> {
     try {
       await this.loadConfig();
-      console.log('[PLISIO] Creating withdrawal:', withdrawalData);
+      console.log('[PLISIO] Creating automatic withdrawal:', withdrawalData);
 
       if (!this.secretKey) {
         throw new Error('Plisio secret key not configured');
       }
 
-      // Primeiro, obter a taxa de conversão para a moeda específica
-      const currencyRates = await this.getCurrencyRates('BRL');
-      
-      // Encontrar a moeda específica (ex: USDT_BSC)
-      const filteredCurrency = currencyRates.data.find(currency => 
-        currency.cid === withdrawalData.currency
-      );
+      // Converter o valor de BRL para USD primeiro (taxa aproximada 1 USD = 5.5 BRL)
+      const amountUSD = withdrawalData.amount / 5.5;
 
-      if (!filteredCurrency) {
-        throw new Error(`Currency ${withdrawalData.currency} not supported by Plisio`);
-      }
-
-      // Calcular o valor final em crypto baseado na taxa fiat
-      const finalAmount = withdrawalData.amount * filteredCurrency.fiat_rate;
-
-      console.log('[PLISIO] Currency conversion:', {
-        originalAmount: withdrawalData.amount,
-        currency: withdrawalData.currency,
-        fiatRate: filteredCurrency.fiat_rate,
-        finalAmount: finalAmount
-      });
-
-      const params = new URLSearchParams({
+      // Parâmetros para saque automático conforme documentação Plisio
+      const withdrawalParams = {
         api_key: this.secretKey,
-        currency: withdrawalData.currency,
+        currency: withdrawalData.currency, // ex: USDT_BSC, USDT_TRX, etc.
         type: 'cash_out',
         to: withdrawalData.to,
-        amount: finalAmount.toString()
+        amount: amountUSD.toFixed(6), // Valor em USD com 6 decimais
+        feePlan: 'normal' // Plano de taxa normal
+      };
+
+      console.log('[PLISIO] Withdrawal params:', withdrawalParams);
+
+      // Fazer requisição POST para o endpoint de saque conforme documentação
+      const response = await fetch(`${this.baseUrl}/operations/withdraw`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json'
+        },
+        body: new URLSearchParams(withdrawalParams).toString()
       });
 
-      const response = await fetch(`${this.baseUrl}/operations/withdraw?${params.toString()}`, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json'
-        }
-      });
+      const responseText = await response.text();
+      console.log('[PLISIO] Withdrawal response:', response.status, responseText);
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[PLISIO] Withdrawal API error:', response.status, errorText);
-        
-        // Check if it's a configuration error (IP not set)
-        if (response.status === 400 && errorText.includes('Request IP')) {
-          console.log('[PLISIO] API not configured for withdrawals, using fallback system');
-          
-          // Create fallback withdrawal response
-          const fallbackData = {
-            status: 'success',
-            data: {
-              id: `plisio_withdrawal_${Date.now()}`,
-              status: 'processing',
-              currency: withdrawalData.currency,
-              amount: withdrawalData.amount.toString(),
-              to: withdrawalData.to,
-              order_name: withdrawalData.order_name,
-              order_number: withdrawalData.order_number,
-              created_at: new Date().toISOString(),
-              fee: (withdrawalData.amount * 0.01).toString(), // 1% fee
-              net_amount: (Math.floor(withdrawalData.amount * 0.99)).toString()
-            }
-          };
-          
-          console.log('[PLISIO] Fallback withdrawal created:', fallbackData.data.id);
-          return fallbackData;
-        }
-        
-        throw new Error(`Plisio withdrawal error: ${response.status} - ${errorText}`);
+        console.error('[PLISIO] Withdrawal API error:', response.status, responseText);
+        throw new Error(`Plisio withdrawal error: ${response.status} - ${responseText}`);
       }
 
-      const data = await response.json();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        console.error('[PLISIO] Invalid JSON response:', responseText);
+        throw new Error('Invalid response from Plisio API');
+      }
       
       if (data.status !== 'success') {
         console.error('[PLISIO] Withdrawal failed:', data);
-        throw new Error(`Plisio withdrawal failed: ${JSON.stringify(data)}`);
+        throw new Error(`Plisio withdrawal failed: ${data.message || JSON.stringify(data)}`);
       }
 
-      console.log('[PLISIO] Withdrawal created successfully:', data.data.id);
+      console.log('[PLISIO] Withdrawal created successfully:', data.data);
       return data;
 
     } catch (error) {

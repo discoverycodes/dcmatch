@@ -10,7 +10,7 @@ const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
  * Format: MG-XXXXXXXXXX (12 characters total)
  */
 export function generateOrderNumber(): string {
-  let result = 'MG-';
+  let result = 'MP';
   for (let i = 0; i < 10; i++) {
     result += CHARS.charAt(Math.floor(Math.random() * CHARS.length));
   }
@@ -21,5 +21,5 @@ export function generateOrderNumber(): string {
  * Validates order number format
  */
 export function isValidOrderNumber(orderNumber: string): boolean {
-  return /^MG-[A-Z0-9]{10}$/.test(orderNumber);
+  return /^MP[A-Z0-9]{10}$/.test(orderNumber);
 }
